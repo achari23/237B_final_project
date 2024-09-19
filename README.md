@@ -1,1 +1,3 @@
-# 237B_final_project
+# 237B final project 
+
+the objective of this project is to parallelize the Anatasov Calibration method used to calibrate a single laser such that it can be used to calibrate multiple lasers in parallel. 
