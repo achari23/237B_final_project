@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "matrix.h"
 #include "img.h"
+#include<math.h>
 
 #define CHECK_ERR(err, msg)                           \
     if (err != CL_SUCCESS)                            \
@@ -14,14 +15,18 @@
     }
 
 #define KERNEL_PATH "kernel.cl"
-
-void OpenCLConvolution2D(Matrix *input0, Matrix *input1, Matrix *result)
+  
+//inputs is an array of 3 dim vectors 
+//num_vectors is the number of vectors per input
+//num_inputs is the number of inputs
+//result is a an array of 5x1 dimensional vectors, same number of inputs (e.g. if 5 inputs then 25,1 output)
+void Atanasov_Cal(Matrix *inputs, Matrix *result, int num_inputs, int num_vectors)
 {
     // Load external OpenCL kernel code
     char *kernel_source = OclLoadKernel(KERNEL_PATH); // Load kernel source
 
     // Device input and output buffers
-    cl_mem device_a, device_b, device_c;
+    cl_mem device_a, device_c;
 
     cl_int err;
 
@@ -58,114 +63,122 @@ void OpenCLConvolution2D(Matrix *input0, Matrix *input1, Matrix *result)
     CHECK_ERR(err, "clBuildProgram");
 
     // Create the compute kernel in the program we wish to run
-    kernel = clCreateKernel(program, "convolution2D", &err);
+    kernel = clCreateKernel(program, "atanasov", &err);
     CHECK_ERR(err, "clCreateKernel");
 
-    size_t size_a = sizeof(float) * input0->shape[0] * input0->shape[1] * IMAGE_CHANNELS;
-    size_t size_b = sizeof(float) * input1->shape[0] * input1->shape[1];
-    size_t size_c = sizeof(float) * input0->shape[0] * input0->shape[1] * IMAGE_CHANNELS ;
+    size_t input_size, output_size;
+    input_size = 0; 
+    output_size = 0;
+    for (int i = 0; i < num_inputs; i++) {
+        output_size += sizeof(float) * 5; 
+        input_size += sizeof(float) * inputs[i].shape[0] * inputs[i].shape[1]; 
+    }
 
-    device_a = clCreateBuffer(context,CL_MEM_READ_ONLY , size_a, NULL, &err );
+    
+    //need to squash input data into 1d
+    float* input_data = malloc(input_size);
+    for (int i = 0; i < num_inputs; i++ ) {
+        memcpy(&input_data[i*num_vectors*3], &inputs[i].data, 3*num_vectors*sizeof(float));
+    }   
+    //malloc a squashed output too 
+    float* output = malloc(output_size);
+
+    device_a = clCreateBuffer(context,CL_MEM_READ_ONLY , input_size, NULL, &err );
     CHECK_ERR(err, "clCreateBuffer device a");
-    device_b = clCreateBuffer(context,CL_MEM_READ_ONLY, size_b, NULL, &err );
-    CHECK_ERR(err, "clCreateBuffer device b");
-    device_c = clCreateBuffer(context,CL_MEM_WRITE_ONLY, size_c, NULL, &err );
+    device_c = clCreateBuffer(context,CL_MEM_WRITE_ONLY, output_size, NULL, &err );
     CHECK_ERR(err, "clCreateBuffer device c");
 
     //@@ Copy memory to the GPU here
-    err = clEnqueueWriteBuffer(queue, device_a, CL_TRUE ,0, size_a, input0->data, 0, NULL, NULL);
+    err = clEnqueueWriteBuffer(queue, device_a, CL_TRUE ,0, input_size, input_data, 0, NULL, NULL);
     CHECK_ERR(err, "clEnqueueWriteBuffer device a");
-    err = clEnqueueWriteBuffer(queue, device_b, CL_TRUE,0, size_b, input1->data, 0, NULL, NULL);
-    CHECK_ERR(err, "clEnqueueWriteBuffer device b");
+
 
     // Set the arguments to our compute kernel
-    // __global float * inputData, __global float * outputData, __constant float * maskData,
+    //  __global float * inputData, __global float * outputData, __constant int num_vectors, __constant int num_inputs){
     // int width, int height, int maskWidth,  int imageChannels
     err = clSetKernelArg(kernel, 0, sizeof(cl_mem), &device_a);
     CHECK_ERR(err, "clSetKernelArg 0");
     err |= clSetKernelArg(kernel, 1, sizeof(cl_mem), &device_c);
     CHECK_ERR(err, "clSetKernelArg 1");
-    err |= clSetKernelArg(kernel, 2, sizeof(cl_mem), &device_b);
+    err |= clSetKernelArg(kernel, 2, sizeof(unsigned int), &num_vectors);
     CHECK_ERR(err, "clSetKernelArg 2");
-    err |= clSetKernelArg(kernel, 3, sizeof(unsigned int), &input0->shape[1]);
+    err |= clSetKernelArg(kernel, 3, sizeof(unsigned int), &num_inputs);
     CHECK_ERR(err, "clSetKernelArg 3");
-    err |= clSetKernelArg(kernel, 4, sizeof(unsigned int), &input0->shape[0]);
-    CHECK_ERR(err, "clSetKernelArg 4");
-    err |= clSetKernelArg(kernel, 5, sizeof(unsigned int), &input1->shape[0]);
-    CHECK_ERR(err, "clSetKernelArg 5");
-    int imageChannels = IMAGE_CHANNELS;
-    err |= clSetKernelArg(kernel, 6, sizeof(unsigned int), &imageChannels);
-    CHECK_ERR(err, "clSetKernelArg 6");
+    
 
     // @@ define local and global work sizes
-    size_t global_item_size[2] = {input0->shape[0], input0->shape[1]};
-    size_t local_item_size[2] = {1,1};
+    size_t global_item_size = num_inputs;
+    size_t local_item_size = 1;
     //@@ Launch the GPU Kernel here
-    err = clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_item_size, local_item_size,0, NULL, NULL);
+    err = clEnqueueNDRangeKernel(queue, kernel, 1, NULL, &global_item_size, &local_item_size,0, NULL, NULL);
     CHECK_ERR(err, "clEnqueueNDRangeKernel");
     //@@ Copy the GPU memory back to the CPU here
-    err = clEnqueueReadBuffer(queue, device_c, CL_TRUE ,0, size_c, result->data, 0, NULL, NULL);
+    err = clEnqueueReadBuffer(queue, device_c, CL_TRUE ,0, output_size, output, 0, NULL, NULL);
     CHECK_ERR(err, "clEnqueueReadBuffer device c");
+    for (int i = 0; i < num_inputs; i++ ) {
+        memcpy(&(result[i].data), &output[i*5], 5* sizeof(float));
+    }
+    printf("output 0 %f", output[0]);
     //@@ Free the GPU memory here
     clReleaseMemObject(device_a);
-    clReleaseMemObject(device_b);
     clReleaseMemObject(device_c);
     clReleaseProgram(program);
     clReleaseKernel(kernel); 
     clReleaseCommandQueue(queue); 
     clReleaseContext(context);
+    free(input_data);
+    free(output);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc != 5)
-    {
-        fprintf(stderr, "Usage: %s <input_file_0> <input_file_1> <answer_file> <output_file>\n", argv[0]);
-        return -1;
-    }
+    //if (argc != 5)
+   // {
+   //     fprintf(stderr, "Usage: %s <input_file_0> <input_file_1> <answer_file> <output_file>\n", argv[0]);
+  //      return -1;
+  //  }
 
-    const char *input_file_a = argv[1];
-    const char *input_file_b = argv[2];
-    const char *input_file_c = argv[3];
-    const char *input_file_d = argv[4];
 
     // Host input and output vectors and sizes
-    Matrix host_a, host_b, host_c, answer;
+    Matrix inputs[2];
+    Matrix outputs[2];
     
     cl_int err;
 
-    err = LoadImg(input_file_a, &host_a);
-    CHECK_ERR(err, "LoadImg");
+    err = LoadMatrix("Dataset/0/input.raw", &inputs[0]);
+    CHECK_ERR(err, "LoadMatrix0");
 
-    err = LoadMatrix(input_file_b, &host_b);
-    CHECK_ERR(err, "LoadMatrix");
+    err = LoadMatrix("Dataset/1/input.raw", &inputs[1]);
+    CHECK_ERR(err, "LoadMatrix1");
 
-    err = LoadImg(input_file_c, &answer);
-    CHECK_ERR(err, "LoadImg");
+    err = LoadMatrix("Dataset/0/output.raw", &outputs[0]);
+    CHECK_ERR(err, "LoadMatrixoutput0");
 
-    int rows, cols;
-    //@@ Update these values for the output rows and cols of the output
-    //@@ Do not use the results from the answer image
-    rows = host_a.shape[0];
-    cols = host_a.shape[1] 
-    // Allocate the memory for the target.
-    host_c.shape[0] = host_a.shape[0];
-    host_c.shape[1] = host_a.shape[1]; 
-    host_c.data = (float *)malloc(sizeof(float) * host_c.shape[0] * host_c.shape[1] * IMAGE_CHANNELS);
+    err = LoadMatrix("Dataset/1/output.raw", &outputs[1]);
+    CHECK_ERR(err, "LoadMatrixoutput1");
 
-    OpenCLConvolution2D(&host_a, &host_b, &host_c);
+
+    Matrix answers[2]; 
+   
+    answers[0].shape[0] = 1; 
+    answers[0].shape[1] = 5;
+    answers[1].shape[0] = 1; 
+    answers[1].shape[1] = 5;
+
+    int num_inputs = 2; 
+    int num_vectors = 4; 
+    Atanasov_Cal(inputs, answers, num_inputs, num_vectors);
 
     // Save the image
-    SaveImg(input_file_d, &host_c);
+   // SaveMatrix("Dataset/0/studentOut.raw", &answers[0]);
+   // SaveMatrix("Dataset/1/studentOut.raw", &answers[1]);
 
-    // Check the result of the convolution
-    CheckImg(&answer, &host_c);
+    // Check the result of the atansov calibration
+   // CheckMatrix(&outputs[0], &answers[0]);
+   // CheckMatrix(&outputs[1], &answers[1]);
 
     // Release host memory
-    free(host_a.data);
-    free(host_b.data);
-    free(host_c.data);
-    free(answer.data);
+    
 
     return 0;
 }
