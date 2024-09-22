@@ -71,15 +71,22 @@ void Atanasov_Cal(Matrix *inputs, Matrix *result, int num_inputs, int num_vector
     output_size = 0;
     for (int i = 0; i < num_inputs; i++) {
         output_size += sizeof(float) * 5; 
-        input_size += sizeof(float) * inputs[i].shape[0] * inputs[i].shape[1]; 
+        input_size += sizeof(float) * 3*num_vectors; 
     }
 
     
     //need to squash input data into 1d
     float* input_data = malloc(input_size);
+    printf("%d\n", num_vectors);
     for (int i = 0; i < num_inputs; i++ ) {
-        memcpy(&input_data[i*num_vectors*3], &inputs[i].data, 3*num_vectors*sizeof(float));
-    }   
+        for (int j = 0; j < num_vectors*3; j++) {
+            input_data[i*num_vectors*3 + j] = inputs[i].data[j]; 
+        }
+        //memcpy(&(input_data[i*num_vectors*3]), &((inputs[i]).data), 3*num_vectors*sizeof(float));
+    }  
+    for (int i = 0; i< 3; i++ ) {
+        printf("%f\n", input_data[i]);
+    }
     //malloc a squashed output too 
     float* output = malloc(output_size);
 
@@ -116,9 +123,15 @@ void Atanasov_Cal(Matrix *inputs, Matrix *result, int num_inputs, int num_vector
     err = clEnqueueReadBuffer(queue, device_c, CL_TRUE ,0, output_size, output, 0, NULL, NULL);
     CHECK_ERR(err, "clEnqueueReadBuffer device c");
     for (int i = 0; i < num_inputs; i++ ) {
-        memcpy(&(result[i].data), &output[i*5], 5* sizeof(float));
+        //memcpy(&(result[i].data), &output[i*5], 5* sizeof(float));
+        for (int j = 0; j < 5; j++) {
+       //     result[i].data[j] = output[i*5+j];
+        }
     }
-    printf("output 0 %f", output[0]);
+    for (int i = 0; i < 10; i++){
+        printf("output %d %f\n",i, output[i]);
+    }
+        
     //@@ Free the GPU memory here
     clReleaseMemObject(device_a);
     clReleaseMemObject(device_c);
@@ -166,16 +179,16 @@ int main(int argc, char *argv[])
     answers[1].shape[1] = 5;
 
     int num_inputs = 2; 
-    int num_vectors = 4; 
+    int num_vectors = inputs[0].shape[0]; 
     Atanasov_Cal(inputs, answers, num_inputs, num_vectors);
 
     // Save the image
-   // SaveMatrix("Dataset/0/studentOut.raw", &answers[0]);
-   // SaveMatrix("Dataset/1/studentOut.raw", &answers[1]);
+    //SaveMatrix("Dataset/0/studentOut.raw", &answers[0]);
+    //SaveMatrix("Dataset/1/studentOut.raw", &answers[1]);
 
     // Check the result of the atansov calibration
-   // CheckMatrix(&outputs[0], &answers[0]);
-   // CheckMatrix(&outputs[1], &answers[1]);
+    //CheckMatrix(&outputs[0], &answers[0]);
+    //CheckMatrix(&outputs[1], &answers[1]);
 
     // Release host memory
     
